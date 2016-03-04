@@ -6,6 +6,7 @@ lazy val reactiveFlows = project
 
 name := "reactive-flows"
 
+resolvers += Resolver.bintrayRepo("knutwalker", "maven")
 libraryDependencies ++= Vector(
   Library.akkaClusterSharding,
   Library.akkaDistributedData,
@@ -18,6 +19,7 @@ libraryDependencies ++= Vector(
   Library.circeJava8,
   Library.constructrAkka,
   Library.log4jCore,
+  Library.typedActors,
   Library.akkaHttpTestkit      % "test",
   Library.akkaMultiNodeTestkit % "test",
   Library.akkaTestkit          % "test",

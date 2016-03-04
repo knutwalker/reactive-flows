@@ -11,6 +11,7 @@ object Version {
   final val Log4j                    = "2.5"
   final val Scala                    = "2.11.7"
   final val ScalaTest                = "2.2.6"
+  final val TypedActors              = "2.0.0-a24-5dd0deaad210082d3147ab1beeee37bc585d2305"
 }
 
 object Library {
@@ -28,5 +29,6 @@ object Library {
   val circeJava8               = "io.circe"                 %% "circe-java8"                        % Version.Circe
   val constructrAkka           = "de.heikoseeberger"        %% "constructr-akka"                    % Version.Constructr
   val log4jCore                = "org.apache.logging.log4j" %  "log4j-core"                         % Version.Log4j
+  val typedActors              = "de.knutwalker"            %% "typed-actors"                       % Version.TypedActors
   val scalaTest                = "org.scalatest"            %% "scalatest"                          % Version.ScalaTest
 }

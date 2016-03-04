@@ -16,18 +16,23 @@
 
 package de.heikoseeberger.reactiveflows
 
-import akka.actor.{ Actor, ActorLogging, ActorRef, Props, Status }
-import akka.cluster.pubsub.DistributedPubSubMediator
+import de.knutwalker.akka.typed._
+import de.knutwalker.union._
+
+import akka.actor.{ Actor, ActorLogging, Status }
+import akka.cluster.pubsub.DistributedPubSubMediator.Subscribe
+import akka.cluster.pubsub.{ DistributedPubSubMessage, DistributedPubSubMediator }
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Directives
 import akka.stream.ActorMaterializer
-import akka.pattern.{ ask, pipe }
+import akka.pattern.pipe
 import akka.stream.scaladsl.Source
 import akka.stream.{ Materializer, OverflowStrategy }
 import akka.util.Timeout
 import de.heikoseeberger.akkahttpcirce.CirceSupport
 import de.heikoseeberger.akkasse.{ EventStreamMarshalling, ServerSentEvent }
+import de.heikoseeberger.reactiveflows.FlowFacade.FlowCommand
 import scala.concurrent.ExecutionContext
 import scala.reflect.ClassTag
 
@@ -43,11 +48,11 @@ object HttpService {
   final val Name = "http-service"
   // $COVERAGE-ON$
 
-  def props(address: String, port: Int, flowFacade: ActorRef, flowFacadeTimeout: Timeout, mediator: ActorRef, eventBufferSize: Int): Props =
-    Props(new HttpService(address, port, flowFacade, flowFacadeTimeout, mediator, eventBufferSize))
+  def props(address: String, port: Int, flowFacade: ActorRef[FlowCommand], flowFacadeTimeout: Timeout, mediator: ActorRef[DistributedPubSubMessage | Subscribe], eventBufferSize: Int): Props[Null] =
+    PropsOf[Null] apply new HttpService(address, port, flowFacade, flowFacadeTimeout, mediator, eventBufferSize)
 
   private[reactiveflows] def route(
-    httpService: ActorRef, flowFacade: ActorRef, flowFacadeTimeout: Timeout, mediator: ActorRef, eventBufferSize: Int
+    httpService: ActorRef[Stop.type], flowFacade: ActorRef[FlowCommand], flowFacadeTimeout: Timeout, mediator: ActorRef[DistributedPubSubMessage | Subscribe], eventBufferSize: Int
   )(implicit ec: ExecutionContext, mat: Materializer) = {
     import CirceSupport._
     import Directives._
@@ -75,16 +80,18 @@ object HttpService {
       path(Segment / "messages") { flowName =>
         get {
           onSuccess(flowFacade ? GetMessages(flowName)) {
-            case messages: Seq[Flow.Message] @unchecked => complete(messages)
-            case unknownFlow: FlowUnknown               => complete(StatusCodes.NotFound -> unknownFlow)
+            case FoundMessages(messages)  => complete(messages)
+            case unknownFlow: FlowUnknown => complete(StatusCodes.NotFound -> unknownFlow)
+            case _                        => complete(StatusCodes.NotFound -> FlowUnknown(flowName))
           }
         } ~
         post {
           entity(as[AddMessageRequest]) {
             case AddMessageRequest(text) =>
               onSuccess(flowFacade ? AddMessage(flowName, text)) {
-                case messageAdded: Flow.MessageAdded => complete(StatusCodes.Created -> messageAdded)
-                case unknownFlow: FlowUnknown        => complete(StatusCodes.NotFound -> unknownFlow)
+                case messageAdded: MessageAdded => complete(StatusCodes.Created -> messageAdded)
+                case unknownFlow: FlowUnknown   => complete(StatusCodes.NotFound -> unknownFlow)
+                case _                          => complete(StatusCodes.NotFound -> FlowUnknown(flowName))
               }
           }
         }
@@ -94,6 +101,7 @@ object HttpService {
           onSuccess(flowFacade ? RemoveFlow(flowName)) {
             case flowRemoved: FlowRemoved => complete(StatusCodes.NoContent)
             case unknownFlow: FlowUnknown => complete(StatusCodes.NotFound -> unknownFlow)
+            case _                        => complete(StatusCodes.NotFound -> FlowUnknown(flowName))
           }
         }
       } ~
@@ -105,6 +113,7 @@ object HttpService {
           onSuccess(flowFacade ? AddFlow(addFlowRequest.label)) {
             case flowAdded: FlowAdded     => complete(StatusCodes.Created -> flowAdded)
             case existingFlow: FlowExists => complete(StatusCodes.Conflict -> existingFlow)
+            case _                        => complete(StatusCodes.NotFound -> FlowUnknown(addFlowRequest.label))
           }
         }
       }
@@ -128,7 +137,7 @@ object HttpService {
     // format: ON
 
     def serverSentEvents[A: ClassTag](toServerSentEvent: A => ServerSentEvent) = {
-      def subscribe(subscriber: ActorRef) = mediator ! DistributedPubSubMediator.Subscribe(className[A], subscriber)
+      def subscribe(subscriber: UntypedActorRef) = mediator ! DistributedPubSubMediator.Subscribe(className[A], subscriber)
       Source.actorRef[A](eventBufferSize, OverflowStrategy.dropHead)
         .map(toServerSentEvent)
         .mapMaterializedValue(subscribe)
@@ -138,7 +147,7 @@ object HttpService {
   }
 }
 
-class HttpService(address: String, port: Int, flowFacade: ActorRef, flowFacadeTimeout: Timeout, mediator: ActorRef, eventBufferSize: Int)
+class HttpService(address: String, port: Int, flowFacade: ActorRef[FlowCommand], flowFacadeTimeout: Timeout, mediator: ActorRef[DistributedPubSubMessage | Subscribe], eventBufferSize: Int)
     extends Actor with ActorLogging {
   import HttpService._
   import context.dispatcher
@@ -146,14 +155,14 @@ class HttpService(address: String, port: Int, flowFacade: ActorRef, flowFacadeTi
   private implicit val mat = ActorMaterializer()
 
   Http(context.system)
-    .bindAndHandle(route(self, flowFacade, flowFacadeTimeout, mediator, eventBufferSize), address, port)
+    .bindAndHandle(route(self.typed, flowFacade, flowFacadeTimeout, mediator, eventBufferSize), address, port)
     .pipeTo(self)
 
   override def receive = binding
 
   private def binding: Receive = {
-    case serverBinding @ Http.ServerBinding(address) =>
-      log.info("Listening on {}", address)
+    case serverBinding @ Http.ServerBinding(addr) =>
+      log.info("Listening on {}", addr)
       context.become(bound(serverBinding))
 
     case Status.Failure(cause) =>

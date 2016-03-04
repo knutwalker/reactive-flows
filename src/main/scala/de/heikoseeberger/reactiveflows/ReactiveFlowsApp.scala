@@ -16,10 +16,14 @@
 
 package de.heikoseeberger.reactiveflows
 
+import de.knutwalker.akka.typed._
+import de.knutwalker.union.|
+
 import akka.actor.ActorSystem
 import akka.cluster.Cluster
 import akka.cluster.ddata.DistributedData
-import akka.cluster.pubsub.DistributedPubSub
+import akka.cluster.pubsub.DistributedPubSubMediator.Subscribe
+import akka.cluster.pubsub.{ DistributedPubSubMessage, DistributedPubSub }
 import akka.cluster.sharding.ClusterSharding
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
@@ -33,16 +37,16 @@ object ReactiveFlowsApp {
 
     val system = ActorSystem("reactive-flows-system")
     Cluster(system).registerOnMemberUp {
-      val mediator = DistributedPubSub(system).mediator
+      val mediator = DistributedPubSub(system).mediator.typed[DistributedPubSubMessage | Subscribe]
       Flow.startSharding(system, mediator, Settings(system).flowFacade.shardCount)
-      system.actorOf(
+      ActorOf(
         ReactiveFlows.props(
           mediator,
-          DistributedData(system).replicator,
-          ClusterSharding(system).shardRegion(className[Flow])
+          DistributedData(system).replicator.typed,
+          ClusterSharding(system).shardRegion(className[Flow]).typed
         ),
         ReactiveFlows.Name
-      )
+      )(system)
     }
 
     Await.ready(system.whenTerminated, Duration.Inf)
